@@ -1,4 +1,6 @@
+### Sample usage
 
+```cpp
 #include <TimeLib.h> // time_long (date, time lib)
 
 #include "modules/async_http.h"
@@ -156,3 +158,4 @@ asynchttp.send2http_url(arg);
 output:
 // [http] #> [7] 192.168.1.10:80/json.htm?type=command&param=udevice&idx=25&nvalue=0&svalue=230.17
 // [http] #< [7] {"status":"OK","title":"UpdateDevice"}
+```

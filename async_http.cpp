@@ -1,15 +1,19 @@
 #include "async_http.h"
 
-AsyncHTTP::AsyncHTTP() {}
+AsyncHTTP::AsyncHTTP() : client(nullptr) {}
 
-AsyncHTTP::~AsyncHTTP() {}
+AsyncHTTP::~AsyncHTTP() {
+    if (client) {
+        client->close(true);
+        delete client;
+    }
+}
 
 void AsyncHTTP::handleRequestCleanup(AsyncClient *client)
 {
     if (client) {
         client->close(true);
         delete client;
-        client = nullptr;
     }
 }
 //--------------------------------------------------------------------------------
@@ -30,9 +34,9 @@ unsigned long AsyncHTTP::send2http(const char *auth, const char *host, int port,
     strncpy(data.query, query, sizeof(data.query));
 
     if (send2http_queue(data)) {
-        // OK
+        return getID;
     }
-    return getID;
+    return 0;
 }
 
 unsigned long AsyncHTTP::send2http_fmt(const char *auth, const char *host, int port, const char *fmt, ...)
@@ -47,7 +51,6 @@ unsigned long AsyncHTTP::send2http_fmt(const char *auth, const char *host, int p
     va_list args;
     va_start(args, fmt);
     int formattedLength = vsnprintf(query, sizeof(query), fmt, args);
-
     va_end(args);
 
     if (formattedLength < 0 || static_cast<size_t>(formattedLength) >= sizeof(query)) {
@@ -64,9 +67,9 @@ unsigned long AsyncHTTP::send2http_fmt(const char *auth, const char *host, int p
     strncpy(data.query, query, sizeof(data.query));
 
     if (send2http_queue(data)) {
-        // OK
+        return getID;
     }
-    return getID;
+    return 0;
 }
 
 unsigned long AsyncHTTP::send2http_url(const char *char_url)
@@ -104,27 +107,27 @@ unsigned long AsyncHTTP::send2http_url(const char *char_url)
         }
     }
 
-    // Check if there's a port specified
     auto domainEnd = std::find(url.begin(), url.end(), '/');
     auto portStart = std::find(url.begin(), domainEnd, ':');
 
     if (portStart != domainEnd) {
         domain       = std::string(url.begin(), portStart);
         auto portStr = std::string(portStart + 1, domainEnd);
-        port         = std::stoi(portStr);
-        Serial.printf("[http] ERR Invalid port number");
-        return 0;
-
+        try {
+            port = std::stoi(portStr);
+        } catch (...) {
+            Serial.printf("[http] ERR Invalid port number\n");
+            return 0;
+        }
     } else {
         domain = std::string(url.begin(), domainEnd);
     }
 
     if (domain.empty()) {
-        Serial.printf("[http] ERR Invalid URL format (missing domain)");
+        Serial.printf("[http] ERR Invalid URL format (missing domain)\n");
         return 0;
     }
 
-    // Find the path
     if (domainEnd != url.end()) {
         path = std::string(domainEnd, url.end());
     }
@@ -137,9 +140,10 @@ unsigned long AsyncHTTP::send2http_url(const char *char_url)
     httpData.port = port;
     snprintf(httpData.query, sizeof(httpData.query), "%s", path.c_str());
 
-    httpDataList.push_back(httpData);
-
-    return getID;
+    if (send2http_queue(httpData)) {
+        return getID;
+    }
+    return 0;
 }
 
 //--------------------------------------------------------------------------------
@@ -149,13 +153,15 @@ bool AsyncHTTP::send2http_queue(const HttpData &data)
     // Serial.printf("[http_v] send2http_queue %s %i %s", data.host, data.port, data.query);
 
     if (WiFi.status() == WL_CONNECTED) {
-        for (auto it = httpDataList.begin(); it != httpDataList.end(); ++it) {
-            if (
-                strncmp(it->auth, data.auth, sizeof(it->auth)) == 0 &&
-                strncmp(it->host, data.host, sizeof(it->host)) == 0 &&
-                it->port == data.port &&
-                strncmp(it->query, data.query, sizeof(it->query)) == 0) {
-                // Serial.printf("[http] Data already exists in the queue, not adding.");
+        if (httpDataList.size() >= MAX_HTTP_DATA_LIST_SIZE) {
+            httpDataList.pop_back();
+        }
+
+        for (const auto &item : httpDataList) {
+            if (strncmp(item.auth, data.auth, sizeof(item.auth)) == 0 &&
+                strncmp(item.host, data.host, sizeof(item.host)) == 0 &&
+                item.port == data.port &&
+                strncmp(item.query, data.query, sizeof(item.query)) == 0) {
                 return false; // Data already exists, so don't add it again
             }
         }
@@ -175,7 +181,7 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
 
     // Serial.printf("[http_v] sendRequest [%lu] %s %i %s", sendID, data.host, data.port, data.query);
 
-    if (ESP.getFreeHeap() < 10000) {
+    if (ESP.getFreeHeap() < 8000) {
         Serial.printf("[http] sendRequest:ERR Heap below threshold");
         return;
     }
@@ -187,22 +193,18 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
         return;
     }
 
-    //setStatusLED(status_leds, LED_HTTP, BLUE);
+    // setStatusLED(status_leds, LED_HTTP, BLUE);
 
-    // client->onError([this, sendID](void *arg, AsyncClient *client, int8_t error)
     client->onError([this, sendID](void *arg, AsyncClient *client, err_t error) {
-        Serial.printf("[http] ## [%lu] ERR %s", sendID, client->errorToString(error));
-
-        //setStatusLED(status_leds, LED_HTTP, RED);
-        // handleRequestCleanup(client);
+        // Serial.printf("[http] ## [%lu] ERR %s\n", sendID, client->errorToString(error));
+        // setStatusLED(status_leds, LED_HTTP, RED);
+        handleRequestCleanup(client);
     },
                     nullptr);
 
     client->onDisconnect([this, sendID](void *arg, AsyncClient *client) {
         // Serial.printf("[http] ## [%lu] onDisconnect", sendID);
-
-        //setStatusLED(status_leds, LED_HTTP, BLACK);
-
+        // setStatusLED(status_leds, LED_HTTP, BLACK);
         handleRequestCleanup(client);
     },
                          nullptr);
@@ -211,8 +213,7 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
         // Serial.printf("[http] ## [%lu] onData", sendID);
         if (len > 0) {
             handleData(client, sendID, data, len);
-
-            //setStatusLED(status_leds, LED_HTTP, GREEN);
+            // setStatusLED(status_leds, LED_HTTP, GREEN);
         }
     },
                    nullptr);
@@ -222,29 +223,11 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
     },
                   nullptr);
 
-    /* client->onPacket([](void *arg, AsyncClient *client, pbuf *packet) {
-        for (size_t i = 0; i < packet->tot_len; i++) {
-            uint8_t byte;
-            if (pbuf_copy_partial(packet, &byte, 1, i) == 1) {
-                Serial.print(byte, HEX); // Print each byte in hexadecimal format
-                Serial.print(" ");       // Separate bytes with space
-            }
-        }
-        Serial.println(); // Print a new line after all bytes are printed
-    },
-                     nullptr);
-    */
-
     client->onTimeout([sendID](void *arg, AsyncClient *client, uint32_t time) {
         Serial.printf("[http] ## [%lu] Timeout", sendID);
+        //handleRequestCleanup(client);
     },
                       nullptr);
-
-    /*  client->onPoll([sendID](void *arg, AsyncClient *client) {
-         Serial.printf("[http] ## [%lu] Poll", sendID);
-     },
-                    nullptr);
-    */
 
     client->onConnect([this, data, sendID](void *arg, AsyncClient *client) {
         // Serial.printf("[http] Connected to %s", data.host);
@@ -271,11 +254,10 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
                       nullptr);
 
     if (!client->connect(data.host, data.port)) {
-        Serial.printf("[http] ## [%lu] ERR Failed to connect %s", sendID, data.host);
-        // client->setRxTimeout(5000);
-        // setStatusLED(LED_HTTP, RED);
-        // handleRequestCleanup(client);
+        Serial.printf("[http] ## [%lu] ERR Failed to connect %s\n", sendID, data.host);
+        handleRequestCleanup(client);
     }
+
 }
 
 //--------------------------------------------------------------------------------
@@ -289,61 +271,6 @@ void AsyncHTTP::onData_cb_json(std::function<void(unsigned long, JsonDocument &d
 {
     onData_cb_json_ = callback;
 }
-/* void AsyncHTTP::handleData(AsyncClient *c, unsigned long sendID, void *data, size_t len)
-{
-    // debug
-    Serial.print("[http] Received data: ");
-    for (size_t i = 0; i < len; i++)
-        Serial.write(reinterpret_cast<char *>(data)[i]);
-    Serial.println();
-
-    try {
-        size_t jsonStart = 0;
-        size_t jsonEnd   = 0;
-
-        for (size_t i = 0; i < len; i++) {
-            if (reinterpret_cast<char *>(data)[i] == '{') {
-                jsonStart = i;
-                break;
-            }
-        }
-
-        for (size_t i = jsonStart; i < len; i++) {
-            if (reinterpret_cast<char *>(data)[i] == '}') {
-                jsonEnd = i;
-                break;
-            }
-        }
-
-        size_t jsonLen = jsonEnd - jsonStart + 1; // Calculate the length of the JSON data
-
-        if (jsonStart < jsonEnd && jsonLen > 0) {
-            // Extract the JSON portion from the data and put it in a std::string
-            std::string jsonString(reinterpret_cast<char *>(data) + jsonStart, jsonLen);
-
-            // Remove whitespace characters
-            jsonString.erase(std::remove_if(jsonString.begin(), jsonString.end(), [](char c) {
-                                 return std::isspace(static_cast<unsigned char>(c));
-                             }),
-                             jsonString.end());
-
-            Serial.printf("[http] #< [%lu] %s", sendID, jsonString.c_str());
-
-            if (onDataCallback_)
-                onDataCallback_(sendID, jsonString.c_str());
-
-        }
-
-        else {
-            Serial.printf("[http] [%lu] ERR response not JSON");
-        }
-
-    } catch (const std::exception &e) {
-        // Handle any other exceptions that might occur
-        Serial.print("Exception: ");
-        Serial.println(e.what());
-    }
-} */
 
 void AsyncHTTP::handleData(AsyncClient *c, unsigned long sendID, void *data, size_t len)
 {
@@ -353,32 +280,9 @@ void AsyncHTTP::handleData(AsyncClient *c, unsigned long sendID, void *data, siz
         Serial.write(reinterpret_cast<char *>(data)[i]);
     Serial.println(); */
 
-    // size_t jsonStart = 0;
-
-    // Find the start of the JSON content
-    /*  for (size_t i = 0; i < len; i++) {
-         if (reinterpret_cast<char *>(data)[i] == '{') {
-             jsonStart = i;
-             break;
-         }
-     } */
-    // Find the start of the JSON content while ignoring spaces
-    /*  std::string jsonData;
-     bool        startCopying = false;
-     for (size_t i = 0; i < len; i++) {
-         char currentChar = reinterpret_cast<char *>(data)[i];
-
-         if (currentChar == '{') {
-             startCopying = true;
-         }
-
-         if (startCopying && !std::isspace(static_cast<unsigned char>(currentChar))) {
-             jsonData += currentChar;
-         }
-     }  */
 
     if (data == nullptr) {
-        // Handle invalid payload
+        
         return;
     }
 

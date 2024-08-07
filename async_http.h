@@ -52,6 +52,7 @@ class AsyncHTTP
     bool send2http_queue(const HttpData &data);
     void sendRequest(unsigned long sendID, unsigned long timestamp, const HttpData &data);
     void handleRequestCleanup(AsyncClient *client);
+    void clearRequestFromQueue(unsigned long sendID);
 
     std::function<void(unsigned long, const char *)>      onData_cb_;
     std::function<void(unsigned long, JsonDocument &doc)> onData_cb_json_;

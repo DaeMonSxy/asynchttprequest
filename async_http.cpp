@@ -2,7 +2,8 @@
 
 AsyncHTTP::AsyncHTTP() : client(nullptr) {}
 
-AsyncHTTP::~AsyncHTTP() {
+AsyncHTTP::~AsyncHTTP()
+{
     if (client) {
         client->close(true);
         delete client;
@@ -79,13 +80,13 @@ unsigned long AsyncHTTP::send2http_url(const char *char_url)
 
     // logLibrary.debug("[http] url#", char_url);
 
-    if (ESP.getFreeHeap() < 8000) {
-        Serial.printf("[http] ERR Heap below threshold");
+    if (char_url == nullptr) {
+        Serial.printf("[http] ERR NULL pointer");
         return 0;
     }
 
-    if (char_url == nullptr) {
-        Serial.printf("[http] ERR NULL pointer");
+    if (ESP.getFreeHeap() < 8000) {
+        Serial.printf("[http] ERR Heap below threshold");
         return 0;
     }
 
@@ -199,6 +200,7 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
         // Serial.printf("[http] ## [%lu] ERR %s\n", sendID, client->errorToString(error));
         // setStatusLED(status_leds, LED_HTTP, RED);
         handleRequestCleanup(client);
+        clearRequestFromQueue(sendID);
     },
                     nullptr);
 
@@ -206,6 +208,7 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
         // Serial.printf("[http] ## [%lu] onDisconnect", sendID);
         // setStatusLED(status_leds, LED_HTTP, BLACK);
         handleRequestCleanup(client);
+        clearRequestFromQueue(sendID);
     },
                          nullptr);
 
@@ -225,7 +228,9 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
 
     client->onTimeout([sendID](void *arg, AsyncClient *client, uint32_t time) {
         Serial.printf("[http] ## [%lu] Timeout", sendID);
-        //handleRequestCleanup(client);
+        // handleRequestCleanup(client);
+        // handleRequestCleanup(client);
+        // clearRequestFromQueue(sendID);
     },
                       nullptr);
 
@@ -256,8 +261,8 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
     if (!client->connect(data.host, data.port)) {
         Serial.printf("[http] ## [%lu] ERR Failed to connect %s\n", sendID, data.host);
         handleRequestCleanup(client);
+        clearRequestFromQueue(sendID);
     }
-
 }
 
 //--------------------------------------------------------------------------------
@@ -280,9 +285,7 @@ void AsyncHTTP::handleData(AsyncClient *c, unsigned long sendID, void *data, siz
         Serial.write(reinterpret_cast<char *>(data)[i]);
     Serial.println(); */
 
-
     if (data == nullptr) {
-        
         return;
     }
 
@@ -328,10 +331,29 @@ void AsyncHTTP::handleData(AsyncClient *c, unsigned long sendID, void *data, siz
 
 //--------------------------------------------------------------------------------
 
+void AsyncHTTP::clearRequestFromQueue(unsigned long sendID)
+{
+    for (auto it = httpDataList.begin(); it != httpDataList.end(); ++it) {
+        if (it->sendID == sendID) {
+            httpDataList.erase(it);
+            return;
+        }
+    }
+}
+
+//--------------------------------------------------------------------------------
+
 void AsyncHTTP::loop()
 {
-    if (WiFi.status() != WL_CONNECTED || httpDataList.empty())
+    if (httpDataList.empty())
         return;
+
+    if (WiFi.status() != WL_CONNECTED) {
+        while (!httpDataList.empty()) {
+            httpDataList.pop_back();
+        }
+        return;
+    }
 
     static unsigned long lastExecutionTime = 0;
     unsigned long        currentTime       = millis();

@@ -197,7 +197,7 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
     // setStatusLED(status_leds, LED_HTTP, BLUE);
 
     client->onError([this, sendID](void *arg, AsyncClient *client, err_t error) {
-        // Serial.printf("[http] ## [%lu] ERR %s\n", sendID, client->errorToString(error));
+        Serial.printf("[http] ## [%lu] onError %s\n", sendID, client->errorToString(error));
         // setStatusLED(status_leds, LED_HTTP, RED);
         handleRequestCleanup(client);
         clearRequestFromQueue(sendID);
@@ -205,7 +205,7 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
                     nullptr);
 
     client->onDisconnect([this, sendID](void *arg, AsyncClient *client) {
-        // Serial.printf("[http] ## [%lu] onDisconnect", sendID);
+        Serial.printf("[http] ## [%lu] onDisconnect", sendID);
         // setStatusLED(status_leds, LED_HTTP, BLACK);
         handleRequestCleanup(client);
         clearRequestFromQueue(sendID);
@@ -213,7 +213,7 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
                          nullptr);
 
     client->onData([this, sendID](void *arg, AsyncClient *client, void *data, size_t len) {
-        // Serial.printf("[http] ## [%lu] onData", sendID);
+        Serial.printf("[http] ## [%lu] onData", sendID);
         if (len > 0) {
             handleData(client, sendID, data, len);
             // setStatusLED(status_leds, LED_HTTP, GREEN);
@@ -222,12 +222,12 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
                    nullptr);
 
     client->onAck([sendID](void *arg, AsyncClient *client, size_t len, uint32_t time) {
-        // Serial.printf("[http] ## [%lu] Acknowledgment", sendID);
+        Serial.printf("[http] ## [%lu] onAck", sendID);
     },
                   nullptr);
 
     client->onTimeout([sendID](void *arg, AsyncClient *client, uint32_t time) {
-        Serial.printf("[http] ## [%lu] Timeout", sendID);
+        Serial.printf("[http] ## [%lu] onTimeout", sendID);
         // handleRequestCleanup(client);
         // handleRequestCleanup(client);
         // clearRequestFromQueue(sendID);
@@ -235,8 +235,7 @@ void AsyncHTTP::sendRequest(unsigned long sendID, unsigned long timestamp, const
                       nullptr);
 
     client->onConnect([this, data, sendID](void *arg, AsyncClient *client) {
-        // Serial.printf("[http] Connected to %s", data.host);
-
+        Serial.printf("[http] ## [%lu] onConnect | host %s", sendID, data.host);
         Serial.printf("[http] #> [%lu] %s:%i%s", data.sendID, data.host, data.port, data.query);
 
         char requestBuffer[1024];

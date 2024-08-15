@@ -1,0 +1,210 @@
+#include "async_http.h"
+#include <Arduino.h>
+
+AsyncHTTP::AsyncHTTP() : aClient(nullptr), sentID(0) {}
+
+AsyncHTTP::~AsyncHTTP()
+{
+    if (aClient) {
+        delete aClient;
+    }
+}
+
+unsigned long AsyncHTTP::send2http(const char *auth, const char *host, int port, const char *query)
+{
+    
+    strncpy(global_auth, auth ? auth : "-", sizeof(global_auth) - 1);
+    strncpy(global_host, host, sizeof(global_host) - 1);
+    global_port = port;
+    strncpy(global_query, query, sizeof(global_query) - 1);
+
+    snprintf(request, sizeof(request),
+             "GET %s HTTP/1.1\r\n"
+             "Host: %s:%i\r\n"
+             "Authorization: Basic %s\r\n"
+             "User-Agent: iqESP\r\n"
+             "Connection: close\r\n\r\n",
+             global_query, global_host, global_port, global_auth);
+
+    // Increment and log the request ID
+    sentID++;
+    Serial.printf("[http] #> [%lu] %s:%i %s\n", sentID, global_host, global_port, global_query);
+    return sendRequest(global_host, global_port, request);
+}
+
+unsigned long AsyncHTTP::send2http_url(const char *char_url)
+{
+    return 0;
+    if (char_url == nullptr) {
+        Serial.printf("[http] ERR NULL pointer\n");
+        return 0;
+    }
+
+    std::string url = char_url;
+
+    char protocol[8] = "http";
+    char host[48]    = {0};
+    int  port        = 80; // Default port is 80 for HTTP
+    char query[256]  = {0};
+
+    if (url.find("https://") != std::string::npos) {
+        port = 443;
+        url.erase(0, 8); // Remove "https://"
+    } else if (url.find("http://") != std::string::npos) {
+        url.erase(0, 7); // Remove "http://"
+    }
+
+    auto        domainEnd = url.find('/');
+    std::string domain    = url.substr(0, domainEnd);
+    std::string path      = url.substr(domainEnd);
+
+    // Handle port in domain
+    auto colonPos = domain.find(':');
+    if (colonPos != std::string::npos) {
+        domain = domain.substr(0, colonPos);
+        port   = std::stoi(domain.substr(colonPos + 1));
+    }
+
+    strncpy(host, domain.c_str(), sizeof(host) - 1);
+    strncpy(query, path.c_str(), sizeof(query) - 1);
+
+    // Increment and log the request ID
+    sentID++;
+    Serial.printf("[http] #> [%lu] %s:%i %s\n", sentID, host, port, query);
+    return send2http("-", host, port, query);
+}
+
+void AsyncHTTP::handleData(AsyncClient *c, unsigned long sendID, void *data, size_t len)
+{
+    const char *payloadStart = static_cast<const char *>(data);
+    const char *jsonStart    = strstr(payloadStart, "{");
+    if (!jsonStart)
+        return; // JSON start not found
+
+    const char *jsonEnd = strrchr(payloadStart, '}');
+    if (!jsonEnd || jsonEnd < jsonStart)
+        return; // JSON end not found or occurs before JSON start
+
+    size_t jsonLen = (jsonEnd - jsonStart) + 1;
+    if (jsonLen > len) // JSON length exceeds available payload length
+        return;
+
+    // Extract JSON data
+    std::string jsonData(jsonStart, jsonLen);
+
+    if (!jsonData.empty()) {
+        // Remove spaces and tabs from the JSON string
+        jsonData.erase(std::remove_if(jsonData.begin(), jsonData.end(), [](char c) {
+                           return std::isspace(static_cast<unsigned char>(c));
+                       }),
+                       jsonData.end());
+
+        JsonDocument         doc;
+        DeserializationError error = deserializeJson(doc, jsonData);
+        if (error)
+            Serial.printf("[http] ## [%lu] ERR JSON: %s\n", sendID, error.c_str());
+        else {
+            Serial.printf("[http] #< [%lu] JSON data: %s\n", sendID, jsonData.c_str());
+        }
+        if (onData_cb_json_)
+            onData_cb_json_(sendID, doc);
+
+    } else {
+        Serial.printf("[http] [%lu] ERR response not JSON\n", sendID);
+    }
+
+    clearGlobalVariables(); // Clear global variables after handling data
+}
+
+void AsyncHTTP::onData_cb(std::function<void(unsigned long, const char *)> callback)
+{
+    onData_cb_ = callback;
+}
+
+void AsyncHTTP::onData_cb_json(std::function<void(unsigned long, JsonDocument &doc)> callback)
+{
+    onData_cb_json_ = callback;
+}
+
+unsigned long AsyncHTTP::sendRequest(const char *host, int port, const char *request)
+{
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[http] ERR WiFi not connected");
+        return 0;
+    }
+
+    if (ESP.getFreeHeap() < 8000) {
+        Serial.printf("[http] ERR Heap below threshold\n");
+        return 0;
+    }
+
+    aClient = new AsyncClient();
+
+    if (!aClient) {
+        Serial.println("[http] ERR Failed to create AsyncClient");
+        return 0;
+    }
+
+    strncpy(this->request, request, sizeof(this->request) - 1);
+
+    aClient->onError(clientError, this);
+    aClient->onConnect(clientConnect, this);
+    aClient->onDisconnect(clientDisconnect, this);
+    aClient->onData(clientData, this);
+
+    {
+        // Extract the query for verbose output
+        size_t      queryStart = std::string(request).find("GET ") + 4; // 4 is the length of "GET "
+        size_t      queryEnd   = std::string(request).find(" HTTP/1.1\r\n", queryStart);
+        std::string query      = std::string(request).substr(queryStart, queryEnd - queryStart);
+
+        // Log the request details including host, port, and query
+        Serial.printf("[http] #> [%lu] %s:%i %s\n", this->sentID, host, port, query.c_str());
+    }
+
+    if (!aClient->connect(host, port)) {
+        Serial.println("[http] ERR Failed to connect to server");
+        delete aClient;
+        aClient = nullptr;
+        return 0;
+    }
+
+    return sentID;
+}
+
+void AsyncHTTP::clientError(void *arg, AsyncClient *client, err_t error)
+{
+    AsyncHTTP *self = (AsyncHTTP *)arg;
+    Serial.printf("[http] [%lu] error: %d\n", self->sentID, error);
+}
+
+void AsyncHTTP::clientDisconnect(void *arg, AsyncClient *client)
+{
+    AsyncHTTP *self = (AsyncHTTP *)arg;
+    Serial.printf("[http] [%lu] disconnected\n", self->sentID);
+
+    self->clearGlobalVariables(); // Clear global variables on disconnect
+
+    client->close(true);
+    delete client;
+}
+
+void AsyncHTTP::clientData(void *arg, AsyncClient *client, void *data, size_t len)
+{
+    AsyncHTTP *self = (AsyncHTTP *)arg;
+    self->handleData(client, self->sentID, data, len);
+}
+
+void AsyncHTTP::clientConnect(void *arg, AsyncClient *client)
+{
+    AsyncHTTP *self = (AsyncHTTP *)arg;
+    client->write(self->request, strlen(self->request));
+}
+
+void AsyncHTTP::clearGlobalVariables()
+{
+    memset(global_auth, 0, sizeof(global_auth));
+    memset(global_host, 0, sizeof(global_host));
+    global_port = 0;
+    memset(global_query, 0, sizeof(global_query));
+}

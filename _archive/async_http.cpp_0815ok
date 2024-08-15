@@ -1,0 +1,145 @@
+#include "async_http.h"
+
+AsyncHTTP::AsyncHTTP() : sentID(0) {}
+
+AsyncHTTP::~AsyncHTTP() {}
+
+unsigned long AsyncHTTP::send2http(const std::string auth, const std::string host, int port, const std::string query)
+{
+    std::string request =
+        "GET " + query + " HTTP/1.1\r\n" +
+        "Host: " + host + ":" + std::to_string(port) + "\r\n" +
+        "Authorization: Basic " + auth + "\r\n" +
+        "User-Agent: iqESP\r\n" +
+        "Connection: close\r\n\r\n";
+
+    Serial.printf("[http] #> [%lu] %s:%i%s\n", sentID, host.c_str(), port, query.c_str());
+    return sendRequest(host, port, request);
+}
+
+unsigned long AsyncHTTP::send2http_url(const std::string url)
+{
+    // Serial.printf("[http] url %s\n", url.c_str());
+
+    std::string protocol;
+    std::string host;
+    int         port  = 80; // Default to HTTP
+    std::string query = "/";
+
+    // Step 1: Identify protocol and strip it from the URL
+    size_t protocolPos = url.find("://");
+    if (protocolPos != std::string::npos) {
+        protocol = url.substr(0, protocolPos);
+        if (protocol == "https") {
+            port = 443; // Default to HTTPS
+        }
+    }
+
+    size_t hostStart = (protocolPos == std::string::npos) ? 0 : protocolPos + 3;
+
+    // Step 2: Extract host and possibly port
+    size_t hostEnd = url.find('/', hostStart);
+    size_t portPos = url.find(':', hostStart);
+
+    if (portPos != std::string::npos && portPos < hostEnd) {
+        host = url.substr(hostStart, portPos - hostStart);
+        port = std::stoi(url.substr(portPos + 1, hostEnd - portPos - 1));
+    } else {
+        host = url.substr(hostStart, hostEnd - hostStart);
+    }
+
+    // Step 3: Extract query
+    if (hostEnd != std::string::npos) {
+        query = url.substr(hostEnd);
+    }
+
+    Serial.printf("[http] #> [%lu] %s:%i %s\n", sentID, host.c_str(), port, query.c_str());
+
+    return send2http("-", host, port, query);
+}
+
+void AsyncHTTP::handleData(AsyncClient *c, unsigned long sendID, void *data, size_t len)
+{
+    const char *payloadStart = static_cast<const char *>(data);
+    const char *jsonStart    = strstr(payloadStart, "{");
+    if (!jsonStart) return;
+
+    const char *jsonEnd = strrchr(payloadStart, '}');
+    if (!jsonEnd || jsonEnd < jsonStart) return;
+
+    size_t jsonLen = (jsonEnd - jsonStart) + 1;
+    if (jsonLen > len) return;
+
+    std::string jsonData(jsonStart, jsonLen);
+
+    if (!jsonData.empty()) {
+        jsonData.erase(std::remove_if(jsonData.begin(), jsonData.end(), ::isspace), jsonData.end());
+
+        JsonDocument         doc;
+        DeserializationError error = deserializeJson(doc, jsonData);
+        if (error) {
+            Serial.printf("[http] ## [%lu] ERR JSON: %s\n", sendID, error.c_str());
+        } else {
+            Serial.printf("[http] #< [%lu] JSON data: %s\n", sendID, jsonData.c_str());
+            if (onDataCallbackJson_) {
+                onDataCallbackJson_(sendID, doc);
+            }
+        }
+    } else {
+        Serial.printf("[http] ## [%lu] ERR response not JSON\n", sendID);
+    }
+}
+
+void AsyncHTTP::onDataCallback(std::function<void(unsigned long, const std::string &)> callback)
+{
+    onDataCallback_ = callback;
+}
+
+void AsyncHTTP::onDataCallbackJson(std::function<void(unsigned long, JsonDocument &doc)> callback)
+{
+    onDataCallbackJson_ = callback;
+}
+
+unsigned long AsyncHTTP::sendRequest(const std::string host, int port, const std::string request)
+{
+    AsyncClient *client = new AsyncClient();
+    if (!client)
+        return 0;
+
+    sentID++;
+
+    client->onError([](void *arg, AsyncClient *client, int error) {
+        Serial.println("[http] ## Connect Error");
+        delete client;
+    },
+                    nullptr);
+
+    client->onConnect([this, request](void *arg, AsyncClient *client) {
+        // Serial.println("[http] Connected");
+
+        client->onError(nullptr, nullptr);
+
+        client->onDisconnect([](void *arg, AsyncClient *client) {
+            // Serial.println("[http] Disconnected");
+            delete client;
+        },
+                             nullptr);
+
+        client->onData([this](void *arg, AsyncClient *client, void *data, size_t len) {
+            // Serial.println("[http] onData");
+            handleData(client, sentID, data, len); // Updated to call handleData
+        },
+                       nullptr);
+
+        client->write(request.c_str());
+    },
+                      nullptr);
+
+    if (!client->connect(host.c_str(), port)) {
+        Serial.println("[http] ## Connect Fail");
+        delete client;
+        return 0;
+    }
+
+    return sentID;
+}

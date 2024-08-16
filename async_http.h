@@ -15,11 +15,11 @@
     #include <WiFi.h>
 #endif
 
-// #define LOG_V(fmt, ...) Serial.printf(fmt, ##__VA_ARGS__)
 #define LOG_V(fmt, ...) // Do nothing
+// #define LOG_V(fmt, ...) Serial.printf(fmt, ##__VA_ARGS__)
 
+// #define LOG_I(fmt, ...) // Do nothing
 #define LOG_I(fmt, ...) Serial.printf(fmt, ##__VA_ARGS__)
-#define LOG_I(fmt, ...) // Do nothing
 
 class AsyncHTTP
 {

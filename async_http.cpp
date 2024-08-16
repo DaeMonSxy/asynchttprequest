@@ -75,7 +75,7 @@ void AsyncHTTP::handleData(AsyncClient *c, unsigned long sendID, void *data, siz
         JsonDocument         doc;
         DeserializationError error = deserializeJson(doc, jsonData);
         if (error) {
-           LOG_V("[http] #< [%lu] nonjson: %s\n", sendID, error.c_str());
+           LOG_I("[http] #< [%lu] nonjson: %s\n", sendID, error.c_str());
         } else {
            LOG_I("[http] #< [%lu] json: %s\n", sendID, jsonData.c_str());
             if (onDataCallbackJson_) {
@@ -113,7 +113,7 @@ unsigned long AsyncHTTP::sendRequest(const Request &req)
     unsigned long requestID = req.id;
 
     client->onError([this, requestID](void *arg, AsyncClient *client, int error) {
-       LOG_V("[http] ## [%lu] onError\n", requestID);
+       LOG_I("[http] ## [%lu] onError\n", requestID);
         delete client;
         requestOngoing = false;
     },
@@ -145,7 +145,7 @@ unsigned long AsyncHTTP::sendRequest(const Request &req)
 
    LOG_I("[http] #> [%lu] %s:%i%s\n", requestID, req.host.c_str(), req.port, req.query.c_str());
     if (!client->connect(req.host.c_str(), req.port)) {
-       LOG_V("[http] ## [%lu] Connect ERR\n", requestID);
+       LOG_I("[http] #> [%lu] Connect ERR\n", requestID);
         delete client;
         return 0;
     }
@@ -160,7 +160,7 @@ void AsyncHTTP::loop()
     }
 
     if (requestOngoing && millis() - lastRequestTime > 10000) {
-        LOG_V("[http] ## Timeout - closing connection");
+        LOG_I("[http] ## Timeout - closing connection");
         requestOngoing = false;
         processQueue();
     }

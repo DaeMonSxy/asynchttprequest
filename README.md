@@ -143,12 +143,16 @@ void asynchttp_onDataCallback(unsigned long sentID, JsonDocument &doc)
 
 void Setup_Wifi_http_arg()
 {
-    asynchttp.onData_cb_json(asynchttp_onDataCallback);
+    asynchttp.onDataCallbackJson(asynchttp_onDataCallback);
 
     online.id_http_wan  = asynchttp.send2http_url("ip.jsontest.com");
     online.id_http_time = asynchttp.send2http_url("date.jsontest.com/");
     online.id_http_sun  = asynchttp.send2http_url("api.sunrise-sunset.org/json?lat=47.4978918&lng=19.0401609");
-    online.id_http_domo = asynchttp.send2http_fmt(domo.auth, domo.srv, domo.port, "/json.htm?type=command&param=addlogmessage&message=ping_%s_%s_%s&level=1", wifi.ip_local, dev_model, dev_id); // ping_192.168.11.24_iqRelay4CH_34ab951a6a0b
+
+    char query[256];
+    safe_snprintf(query, sizeof(query),
+                  "/json.htm?type=command&param=addlogmessage&message=ping_%s_%s_%s&level=1", wifi.ip_local, dev_model, dev_id);
+    online.id_http_domo = asynchttp.send2http(domo.auth, domo.srv, domo.port, query);
 }
 
 example:
